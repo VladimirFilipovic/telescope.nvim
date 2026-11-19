@@ -1,0 +1,39 @@
+// Telescope-style bindings (leader = space, prefix `space p` = picker). Merge into ~/.config/zed/keymap.json.
+// Task-backed pickers run telescope-zed in a center terminal; the rest are Zed's native pickers.
+[
+  {
+    "context": "Editor && vim_mode == normal && !menu",
+    "bindings": {
+      // fzf/rg/bat pickers (tasks.json)
+      "space p f": ["task::Spawn", { "task_name": "Telescope: find_files", "reveal_target": "center" }],
+      "space p F": ["task::Spawn", { "task_name": "Telescope: git_files", "reveal_target": "center" }],
+      "space p o": ["task::Spawn", { "task_name": "Telescope: oldfiles", "reveal_target": "center" }],
+      "space p g": ["task::Spawn", { "task_name": "Telescope: live_grep", "reveal_target": "center" }],
+      "space p w": ["task::Spawn", { "task_name": "Telescope: grep_string", "reveal_target": "center" }],
+      "space p /": ["task::Spawn", { "task_name": "Telescope: current_buffer_fuzzy_find", "reveal_target": "center" }],
+      "space p s": ["task::Spawn", { "task_name": "Telescope: git_status", "reveal_target": "center" }],
+      "space p c": ["task::Spawn", { "task_name": "Telescope: git_commits", "reveal_target": "center" }],
+      "space p C": ["task::Spawn", { "task_name": "Telescope: git_bcommits", "reveal_target": "center" }],
+      "space p B": ["task::Spawn", { "task_name": "Telescope: git_branches", "reveal_target": "center" }],
+      "space p t": ["task::Spawn", { "task_name": "Telescope: todo", "reveal_target": "center" }],
+
+      // native Zed pickers for the builtins Zed already covers
+      "space p b": "tab_switcher::Toggle",
+      "space p d": "diagnostics::Deploy",
+      "space p r": "editor::FindAllReferences",
+      "space p S": "outline::Toggle",
+      "space p W": "project_symbols::Toggle",
+      "space p k": "zed::OpenKeymap",
+      "space p :": "command_palette::Toggle",
+      "space p p": "projects::OpenRecent",
+      "space p T": "task::Spawn",
+      "space p .": ["task::Rerun", { "reevaluate_context": true }]
+    }
+  },
+  {
+    "context": "Editor && vim_mode == visual && !menu",
+    "bindings": {
+      "space p w": ["task::Spawn", { "task_name": "Telescope: grep_string", "reveal_target": "center" }]
+    }
+  }
+]

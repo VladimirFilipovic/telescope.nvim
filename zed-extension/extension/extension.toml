@@ -1,0 +1,9 @@
+id = "telescope"
+name = "Telescope"
+version = "0.1.0"
+schema_version = 1
+authors = ["Vladimir Filipovic"]
+description = "Telescope.nvim-style project search (find_files, live_grep, git, TODOs) for Zed's agent, via an MCP context server"
+repository = "https://github.com/VladimirFilipovic/telescope.nvim"
+
+[context_servers.telescope]

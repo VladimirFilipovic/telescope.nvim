@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "root": {
+      "type": "string",
+      "description": "Directory searched when a tool call gives no path. Defaults to the server's working directory."
+    }
+  }
+}

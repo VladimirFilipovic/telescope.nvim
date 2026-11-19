@@ -1,0 +1,474 @@
+#!/usr/bin/env bash
+# Telescope-style pickers for Zed: fzf in a Zed terminal, selection opened back in Zed.
+# Usage: telescope-zed <picker> [args...]   (run `telescope-zed help` for the list)
+# shellcheck disable=SC2016  # single-quoted fzf callbacks are expanded by the shell fzf starts
+set -euo pipefail
+
+# fzf calls back into this script for listings and previews, so those need no shell quoting.
+SELF="${BASH_SOURCE[0]}"
+[[ "$SELF" == /* ]] || SELF="$PWD/$SELF"
+export TELESCOPE_ZED_SELF="$SELF"
+S='"$TELESCOPE_ZED_SELF"'
+
+HIDDEN_TAG="+hidden"
+ESC=$'\033'
+TAB=$'\t'
+
+# Keeps the message on screen: the Zed task closes its terminal tab as soon as the script exits.
+die() {
+  printf 'telescope-zed: %s\n' "$*" >&2
+  if [[ -t 0 && -t 2 ]]; then
+    printf 'press any key to close ' >&2
+    read -r -n 1 -s || true
+  fi
+  exit 1
+}
+
+need() {
+  local bin
+  for bin in "$@"; do
+    command -v "$bin" >/dev/null 2>&1 || die "missing '$bin' (brew install $bin)"
+  done
+}
+
+ROOT="${TELESCOPE_ZED_ROOT:-${ZED_WORKTREE_ROOT:-$PWD}}"
+cd "$ROOT" 2>/dev/null || die "cannot enter project root: $ROOT"
+ROOT="$PWD"
+export TELESCOPE_ZED_ROOT="$ROOT"
+
+# Light or dark palette; follows the macOS appearance unless TELESCOPE_ZED_THEME says otherwise.
+if [[ -z "${TELESCOPE_ZED_THEME:-}" ]]; then
+  if [[ "$(defaults read -g AppleInterfaceStyle 2>/dev/null || true)" == Dark ]]; then
+    TELESCOPE_ZED_THEME=dark
+  else
+    TELESCOPE_ZED_THEME=light
+  fi
+fi
+export TELESCOPE_ZED_THEME
+
+in_git() { git rev-parse --is-inside-work-tree >/dev/null 2>&1; }
+git_top() { git rev-parse --show-toplevel; }
+need_git() {
+  need git
+  in_git || die "not a git repository: $PWD"
+}
+
+strip_ansi() { sed "s/${ESC}\\[[0-9;]*m//g"; }
+
+# Absolute path of a picked entry; relative ones are resolved against the given directory.
+abs_path() {
+  case "$2" in
+    /*) printf '%s' "$2" ;;
+    *) printf '%s/%s' "$1" "$2" ;;
+  esac
+}
+
+# Set TELESCOPE_ZED_DRY_RUN=1 to print the open targets instead of calling zed (testing).
+open_in_zed() {
+  if [[ "${TELESCOPE_ZED_DRY_RUN:-}" == 1 ]]; then
+    printf 'OPEN %s\n' "$@"
+    return 0
+  fi
+  local zed_bin="${TELESCOPE_ZED_BIN:-zed}"
+  command -v "$zed_bin" >/dev/null 2>&1 || die "missing '$zed_bin' CLI (in Zed run \"cli: install\")"
+  "$zed_bin" "$@" || die "$zed_bin could not open: $*"
+}
+
+# Runs fzf with the shared telescope look; extra options and the list on stdin come from the picker.
+# The preview sits on the right and drops below once it would be narrower than 60 columns.
+run_fzf() {
+  local title="$1" colors
+  shift
+  if [[ "$TELESCOPE_ZED_THEME" == dark ]]; then
+    colors="dark,fg:#ebdbb2,bg:-1,hl:#fabd2f,fg+:#fbf1c7,bg+:#3c3836,hl+:#fabd2f,gutter:-1"
+    colors+=",info:#83a598,prompt:#b8bb26,pointer:#fb4934,marker:#8ec07c,spinner:#d3869b"
+    colors+=",header:#fe8019,footer:#928374,border:#665c54,label:#fabd2f,query:#ebdbb2,ghost:#7c6f64"
+  else
+    colors="light,fg:#3c3836,bg:-1,hl:#b57614,fg+:#282828,bg+:#ebdbb2,hl+:#af3a03,gutter:-1"
+    colors+=",info:#076678,prompt:#79740e,pointer:#9d0006,marker:#427b58,spinner:#8f3f71"
+    colors+=",header:#af3a03,footer:#7c6f64,border:#bdae93,label:#b57614,query:#3c3836,ghost:#a89984"
+  fi
+  # The caller's fzf defaults would fight the layout; bash runs the callbacks whatever the login shell is.
+  env -u FZF_DEFAULT_OPTS -u FZF_DEFAULT_OPTS_FILE SHELL="$BASH" fzf \
+    --style=full --height=100% --layout=reverse --info=inline-right --color="$colors" \
+    --input-label=" $title " --list-label=" Results " --preview-label=" Preview " \
+    --prompt="> " --pointer="▶" --marker="+" --with-shell="$BASH -c" \
+    --preview-window="right,50%,<60(down,50%)" \
+    --bind="ctrl-j:down,ctrl-k:up,ctrl-u:preview-half-page-up,ctrl-d:preview-half-page-down" \
+    --bind="ctrl-/:toggle-preview,ctrl-_:toggle-preview,ctrl-a:select-all" \
+    --bind='load:transform-header:[[ $FZF_TOTAL_COUNT -gt 0 ]] || echo "nothing found"' \
+    --footer-border=none \
+    "$@"
+}
+
+# Key hints under the list; ^x means ctrl-x.
+FOOT_BASE="^/ preview · ^u ^d scroll"
+FOOT_MULTI="tab mark · ^a all · $FOOT_BASE"
+
+# Hidden-files state: forced by TELESCOPE_ZED_SHOW_HIDDEN, else read off the running picker's title.
+hidden_on() {
+  case "${TELESCOPE_ZED_SHOW_HIDDEN:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  [[ "${FZF_INPUT_LABEL:-}" == *"$HIDDEN_TAG"* ]]
+}
+
+hidden_default() { if [[ "${TELESCOPE_ZED_HIDDEN:-}" == 1 ]]; then echo 1; else echo 0; fi; }
+
+# Prompt title for a picker, tagged when hidden files are shown.
+titled() { if [[ "$2" == 1 ]]; then printf '%s %s' "$1" "$HIDDEN_TAG"; else printf '%s' "$1"; fi; }
+
+# --- callbacks fzf runs (not pickers) ---
+
+# Project files, .gitignore respected; dotfiles only when hidden is on.
+_files() {
+  local opts
+  if command -v fd >/dev/null 2>&1; then
+    opts=(--type f --type l --strip-cwd-prefix --color=never)
+    if hidden_on; then opts+=(--hidden --exclude .git); fi
+    fd "${opts[@]}"
+  else
+    opts=(--files --color=never)
+    if hidden_on; then opts+=(--hidden --glob '!.git'); fi
+    rg "${opts[@]}"
+  fi
+}
+
+# Files with the newest modification time first.
+_recent() {
+  _files | tr '\n' '\0' | xargs -0 stat -f "%m${TAB}%N" 2>/dev/null | sort -rn | cut -f2-
+}
+
+# rg matches as file:line:col:text. An empty query lists nothing, so a big repo is never dumped.
+_grep() {
+  local query="${1:-}" opts
+  [[ -n "$query" ]] || return 0
+  shift
+  opts=(--column --line-number --no-heading --color=always --smart-case
+    --max-columns=300 --max-columns-preview)
+  if hidden_on; then opts+=(--hidden --glob '!.git'); fi
+  rg "${opts[@]}" "$@" -- "$query" 2>/dev/null || true
+}
+
+# fzf action for ctrl-h: flips the hidden tag in the prompt title and reloads the list.
+_toggle_hidden() {
+  local lister="$1" label="${FZF_INPUT_LABEL:-}" on=1
+  if [[ "$label" == *"$HIDDEN_TAG"* ]]; then
+    on=0
+    label="${label/ $HIDDEN_TAG/}"
+  else
+    label="${label% } $HIDDEN_TAG "
+  fi
+  if [[ "$lister" == _grep ]]; then lister="_grep {q}"; fi
+  printf 'change-input-label(%s)+reload:TELESCOPE_ZED_SHOW_HIDDEN=%s %s %s' "$label" "$on" "$S" "$lister"
+}
+
+# Preview of one file, optionally with a highlighted line; binary files show their type only.
+_preview() {
+  local file="$1" line="${2:-}" opts
+  if [[ -d "$file" ]]; then
+    ls -la -- "$file"
+  elif [[ ! -e "$file" ]]; then
+    echo "(not on disk: $file)"
+  elif [[ ! -s "$file" ]]; then
+    echo "(empty file)"
+  elif ! LC_ALL=C grep -Iq '' -- "$file"; then
+    echo "(binary file, $(wc -c <"$file" | tr -d ' ') bytes)"
+    file -b -- "$file" 2>/dev/null || true
+  elif command -v bat >/dev/null 2>&1; then
+    opts=(--color=always --style=numbers --paging=never --theme="gruvbox-$TELESCOPE_ZED_THEME")
+    if [[ "$line" =~ ^[0-9]+$ ]]; then
+      opts+=(--highlight-line "$line")
+    else
+      opts+=(--line-range=:500)
+    fi
+    bat "${opts[@]}" -- "$file"
+  else
+    head -n 500 -- "$file"
+  fi
+}
+
+# Changed files as "XY<tab>path" (path relative to the repository top), staged green, unstaged red.
+_status() {
+  local entry xy path
+  git -c core.quotePath=false status --porcelain -z --untracked-files=all |
+    while IFS= read -r -d '' entry; do
+      xy="${entry:0:2}"
+      path="${entry:3}"
+      # A rename or copy is followed by its source path; skip it.
+      case "$xy" in R* | C* | ?R | ?C) IFS= read -r -d '' _ || true ;; esac
+      if [[ "$xy" == '??' ]]; then
+        printf '%s[33m??%s[0m\t%s\n' "$ESC" "$ESC" "$path"
+      else
+        printf '%s[32m%s%s[31m%s%s[0m\t%s\n' "$ESC" "${xy:0:1}" "$ESC" "${xy:1:1}" "$ESC" "$path"
+      fi
+    done
+}
+
+# Diff against HEAD for a tracked file, the file itself when there is no diff to show.
+_status_preview() {
+  cd "$(git_top)"
+  local diff=""
+  if git ls-files --error-unmatch -- "$1" >/dev/null 2>&1; then
+    diff=$(git -c core.quotePath=false diff --color=always HEAD -- "$1" 2>/dev/null ||
+      git -c core.quotePath=false diff --color=always --cached -- "$1")
+  fi
+  if [[ -n "$diff" ]]; then printf '%s\n' "$diff"; else _preview "$1"; fi
+}
+
+# Stages a file, or unstages it when it already has staged changes.
+_stage() {
+  cd "$(git_top)"
+  if git diff --cached --quiet -- "$1"; then
+    git add -- "$1"
+  elif git rev-parse --verify --quiet HEAD >/dev/null; then
+    git restore --staged -- "$1"
+  else
+    git rm --cached --quiet -- "$1"
+  fi
+}
+
+# --- shared picker bodies ---
+
+# Opens every selected path (stdin: fzf output, one path per line) relative to the given directory.
+open_files() {
+  local base="$1" f files=()
+  while IFS= read -r f; do
+    if [[ -n "$f" ]]; then files+=("$(abs_path "$base" "$f")"); fi
+  done
+  if ((${#files[@]})); then open_in_zed "${files[@]}"; fi
+}
+
+# Opens selected `file:line:col:text` matches at their position.
+open_matches() {
+  local m f l c targets=()
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue
+    IFS=: read -r f l c _ <<<"$m"
+    targets+=("$(abs_path "$ROOT" "$f"):$l:${c:-1}")
+  done
+  if ((${#targets[@]})); then open_in_zed "${targets[@]}"; fi
+}
+
+# File picker over a callback listing, with the ctrl-h hidden toggle.
+file_picker() {
+  local title="$1" lister="$2" hidden sel
+  shift 2
+  hidden=$(hidden_default)
+  sel=$(FZF_DEFAULT_COMMAND="TELESCOPE_ZED_SHOW_HIDDEN=$hidden $S $lister" \
+    run_fzf "$(titled "$title" "$hidden")" \
+    --multi --scheme=path --footer="^h hidden · $FOOT_MULTI" \
+    --preview="$S _preview {}" \
+    --bind="ctrl-h:transform:$S _toggle_hidden $lister" "$@") || return 0
+  open_files "$ROOT" <<<"$sel"
+}
+
+# Fuzzy picker over grep matches on stdin.
+match_picker() {
+  local title="$1" sel
+  sel=$(run_fzf "$title" --multi --ansi --delimiter=: --footer="$FOOT_MULTI" \
+    --preview="$S _preview {1} {2}" --preview-window="+{2}/2") || return 0
+  strip_ansi <<<"$sel" | open_matches
+}
+
+# --- pickers ---
+
+find_files() {
+  need fzf
+  command -v fd >/dev/null 2>&1 || need rg
+  file_picker "Find Files" _files
+}
+
+# Most recently modified files first; Zed exposes no editor history to scripts.
+oldfiles() {
+  need fzf
+  command -v fd >/dev/null 2>&1 || need rg
+  file_picker "Recent Files" _recent --no-sort
+}
+
+git_files() {
+  need fzf
+  need_git
+  local sel
+  sel=$(git -c core.quotePath=false ls-files --cached --others --exclude-standard |
+    run_fzf "Git Files" --multi --scheme=path --footer="$FOOT_MULTI" --preview="$S _preview {}") || return 0
+  open_files "$ROOT" <<<"$sel"
+}
+
+live_grep() {
+  need fzf rg
+  local initial="${1:-}" hidden sel
+  hidden=$(hidden_default)
+  sel=$(run_fzf "$(titled "Live Grep" "$hidden")" --multi --ansi --disabled --query="$initial" \
+    --ghost="type to search (regex, smart case)" --delimiter=: \
+    --footer="^f refine · ^h hidden · tab mark · ^a all · ^/ preview" \
+    --preview="$S _preview {1} {2}" --preview-window="+{2}/2" \
+    --bind="start:reload:$S _grep {q}" \
+    --bind="change:reload:sleep 0.08; $S _grep {q}" \
+    --bind='load:transform-header:[[ $FZF_TOTAL_COUNT -gt 0 || -z $FZF_QUERY ]] || echo "no matches"' \
+    --bind="ctrl-h:transform:$S _toggle_hidden _grep" \
+    --bind="ctrl-f:unbind(change,ctrl-h,ctrl-f)+change-prompt(refine> )+enable-search+clear-query" \
+    </dev/null) || return 0
+  strip_ansi <<<"$sel" | open_matches
+}
+
+# Word at a 1-based row and column of a file, so grep_string works without a selection.
+word_at() {
+  local file="$1" row="$2" col="$3"
+  [[ -f "$file" && "$row" =~ ^[0-9]+$ && "$col" =~ ^[0-9]+$ ]] || return 0
+  sed -n "${row}p" "$file" | awk -v c="$col" '{
+    s = c; e = c
+    while (s > 1 && substr($0, s-1, 1) ~ /[A-Za-z0-9_]/) s--
+    while (e <= length($0) && substr($0, e, 1) ~ /[A-Za-z0-9_]/) e++
+    print substr($0, s, e - s)
+  }'
+}
+
+grep_string() {
+  need fzf rg
+  # Only the first non-blank line of a multi-line selection is searched.
+  local needle
+  needle=$(printf '%s\n' "${1:-}" | awk 'NF { print; exit }')
+  [[ -n "$needle" ]] || needle=$(word_at "${2:-${ZED_FILE:-}}" "${3:-${ZED_ROW:-}}" "${4:-${ZED_COLUMN:-}}")
+  [[ -n "$needle" ]] || die "grep_string: no selection and no word under the cursor"
+  TELESCOPE_ZED_SHOW_HIDDEN=1 _grep "$needle" --fixed-strings | match_picker "Grep: $needle"
+}
+
+# TODO/FIXME/HACK markers across the project (todo-comments.nvim style).
+todo() {
+  need fzf rg
+  TELESCOPE_ZED_SHOW_HIDDEN=1 _grep '\b(TODO|FIXME|HACK|XXX|NOTE|BUG)\b' | match_picker "TODOs"
+}
+
+# File argument of a buffer picker, falling back to what Zed exports to the task.
+buffer_file() {
+  local file="${2:-${ZED_FILE:-}}"
+  [[ -n "$file" ]] || die "$1: no file in the active editor (save the buffer first)"
+  [[ -f "$file" ]] || die "$1: not a file on disk: $file"
+  printf '%s' "$file"
+}
+
+current_buffer_fuzzy_find() {
+  need fzf
+  local file sel line targets=() start=()
+  file=$(buffer_file current_buffer_fuzzy_find "${1:-}") || exit 1
+  export TELESCOPE_ZED_FILE="$file"
+  # Start on the editor's cursor line when Zed told us where it is.
+  if [[ "${ZED_FILE:-}" == "$file" && "${ZED_ROW:-}" =~ ^[0-9]+$ ]]; then
+    start=(--bind="load:pos($ZED_ROW)")
+  fi
+  sel=$(grep -n '' -- "$file" |
+    run_fzf "${file##*/}" --multi --delimiter=: --nth=2.. --tiebreak=index --footer="$FOOT_MULTI" \
+      --bind="change:first" \
+      --preview="$S _preview \"\$TELESCOPE_ZED_FILE\" {1}" --preview-window="+{1}/2" \
+      ${start[@]+"${start[@]}"}) || return 0
+  while IFS= read -r line; do
+    if [[ -n "$line" ]]; then targets+=("$file:${line%%:*}:1"); fi
+  done <<<"$sel"
+  if ((${#targets[@]})); then open_in_zed "${targets[@]}"; fi
+}
+
+git_status() {
+  need fzf
+  need_git
+  local top sel
+  top=$(git_top)
+  sel=$(_status | run_fzf "Git Status" --multi --ansi --delimiter="$TAB" --tabstop=3 \
+    --footer="^s stage/unstage · $FOOT_MULTI" \
+    --preview="$S _status_preview {2}" \
+    --bind="ctrl-s:execute-silent($S _stage {2})+reload($S _status)") || return 0
+  strip_ansi <<<"$sel" | cut -f2- | open_files "$top"
+}
+
+# Commit log; enter lists the files of the chosen commit, each previewed as its diff in that commit.
+commits_picker() {
+  local title="$1" sel top hash
+  shift
+  top=$(git_top)
+  sel=$(git log --color=always --date=short \
+    --format='%C(yellow)%h%C(reset) %C(green)%ad%C(reset) %s %C(blue)<%an>%C(reset)' "$@" |
+    run_fzf "$title" --ansi --no-sort --footer="enter files · ^y copy hash · $FOOT_BASE" \
+      --preview='git -c core.quotePath=false show --color=always --stat --patch {1}' \
+      --bind='ctrl-y:execute-silent(printf %s {1} | pbcopy)+abort') || return 0
+  hash=$(strip_ansi <<<"$sel" | cut -d' ' -f1)
+  [[ -n "$hash" ]] || return 0
+  cd "$top"
+  export TELESCOPE_ZED_COMMIT="$hash"
+  sel=$(git -c core.quotePath=false show --pretty=format: --name-only --diff-filter=d "$hash" | sed '/^$/d' |
+    run_fzf "Files in $hash" --multi --scheme=path --footer="$FOOT_MULTI" \
+      --preview='git -c core.quotePath=false show --color=always --pretty=format: "$TELESCOPE_ZED_COMMIT" -- {}') || return 0
+  open_files "$top" <<<"$sel"
+}
+
+git_commits() {
+  need fzf
+  need_git
+  commits_picker "Git Commits"
+}
+
+git_bcommits() {
+  need fzf git
+  local file
+  file=$(buffer_file git_bcommits "${1:-}") || exit 1
+  # The file decides the repository, so one opened from outside the worktree still works.
+  cd "$(dirname "$file")"
+  in_git || die "git_bcommits: not in a git repository: $file"
+  commits_picker "Commits: ${file##*/}" --follow -- "$file"
+}
+
+git_branches() {
+  need fzf
+  need_git
+  local sel branch out
+  sel=$(git for-each-ref --sort=-committerdate refs/heads refs/remotes --color=always \
+    --format='%(if)%(symref)%(then)%(else)%(align:38,left)%(refname:short)%(end) %(color:green)%(committerdate:short)%(color:reset) %(subject)%(end)' |
+    sed '/^$/d' |
+    run_fzf "Git Branches" --ansi --no-sort --footer="enter switch · $FOOT_BASE" \
+      --preview='git log --color=always --oneline --graph -40 {1}') || return 0
+  branch=$(strip_ansi <<<"$sel" | awk '{ print $1 }')
+  [[ -n "$branch" ]] || return 0
+  # A remote branch is switched to by its local name, which git creates tracking it.
+  if ! git show-ref --verify --quiet "refs/heads/$branch" &&
+    git show-ref --verify --quiet "refs/remotes/$branch"; then
+    out=$(git switch "${branch#*/}" 2>&1) || out=$(git switch --track "$branch" 2>&1) || die "$out"
+  else
+    out=$(git switch "$branch" 2>&1) || die "$out"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+telescope-zed <picker> [args]
+  find_files                          project files (fd, else rg), .gitignore respected
+  git_files                           tracked and untracked-but-not-ignored files
+  oldfiles                            files by modification time
+  live_grep [initial]                 rg on every keystroke; ctrl-f fuzzy-refines the results
+  grep_string [text] [file row col]   rg for the selection, or the word under the cursor
+  current_buffer_fuzzy_find [file]    lines of the current file
+  git_status                          changed files, diff preview, ctrl-s stage/unstage
+  git_commits                         log; enter lists the commit's files, ctrl-y copies the hash
+  git_bcommits [file]                 log of the current file
+  git_branches                        enter switches branch
+  todo                                TODO/FIXME/HACK/XXX/NOTE/BUG markers
+Keys: tab multi-select, ctrl-a select all, ctrl-j/k move, ctrl-u/d scroll preview,
+      ctrl-/ toggle preview, ctrl-h hidden files (find_files, oldfiles, live_grep), esc close.
+Env:  TELESCOPE_ZED_THEME=light|dark   palette (default: macOS appearance)
+      TELESCOPE_ZED_HIDDEN=1           start with hidden files shown
+      TELESCOPE_ZED_DRY_RUN=1          print what would be opened instead of calling zed
+      TELESCOPE_ZED_BIN=<path>         zed CLI to use
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+case "$cmd" in
+  find_files | git_files | oldfiles | live_grep | grep_string | current_buffer_fuzzy_find | \
+    git_status | git_commits | git_bcommits | git_branches | todo) "$cmd" "$@" ;;
+  _files | _recent | _grep | _toggle_hidden | _preview | _status | _status_preview | _stage) "$cmd" "$@" ;;
+  help | -h | --help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

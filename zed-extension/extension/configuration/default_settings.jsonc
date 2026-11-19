@@ -1,0 +1,4 @@
+{
+  // Directory searched when a tool call gives no path.
+  // "root": "/path/to/project"
+}

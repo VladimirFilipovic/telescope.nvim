@@ -1,0 +1,219 @@
+// Telescope-style pickers as Zed tasks. Merge into ~/.config/zed/tasks.json.
+// Needs `telescope-zed` on PATH (run ../install.sh) plus fzf, rg, fd, bat.
+[
+  {
+    "label": "Telescope: find_files",
+    "command": "telescope-zed",
+    "args": [
+      "find_files"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: git_files",
+    "command": "telescope-zed",
+    "args": [
+      "git_files"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: oldfiles",
+    "command": "telescope-zed",
+    "args": [
+      "oldfiles"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: live_grep",
+    "command": "telescope-zed",
+    "args": [
+      "live_grep"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: grep_string",
+    "command": "telescope-zed",
+    "args": [
+      "grep_string",
+      "${ZED_SELECTED_TEXT:}",
+      "${ZED_FILE:}",
+      "${ZED_ROW:}",
+      "${ZED_COLUMN:}"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: current_buffer_fuzzy_find",
+    "command": "telescope-zed",
+    "args": [
+      "current_buffer_fuzzy_find",
+      "${ZED_FILE:}"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: git_status",
+    "command": "telescope-zed",
+    "args": [
+      "git_status"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: git_commits",
+    "command": "telescope-zed",
+    "args": [
+      "git_commits"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: git_bcommits",
+    "command": "telescope-zed",
+    "args": [
+      "git_bcommits",
+      "${ZED_FILE:}"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: git_branches",
+    "command": "telescope-zed",
+    "args": [
+      "git_branches"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  },
+  {
+    "label": "Telescope: todo",
+    "command": "telescope-zed",
+    "args": [
+      "todo"
+    ],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "use_new_terminal": true,
+    "allow_concurrent_runs": false,
+    "reveal": "always",
+    "reveal_target": "center",
+    "hide": "always",
+    "show_summary": false,
+    "show_command": false,
+    "save": "none",
+    "tags": [
+      "telescope"
+    ]
+  }
+]
